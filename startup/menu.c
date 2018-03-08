@@ -73,6 +73,21 @@ getinterval(time_t s1, uint32_t ns1, time_t s2, uint32_t ns2,
 // Command menu functions 
 
 /*
+ * A0- 4.2 Add a Kernel Menu command
+ * Command for enable the output of debuging Message
+ */
+ 
+static
+int
+cmd_debug(int n, char **a){
+  (void)n;
+  (void)a;
+  dbflags = 0x0010;
+
+  return 0;
+}
+
+/*
  * Function for a thread that runs an arbitrary userlevel program by
  * name.
  *
@@ -93,7 +108,8 @@ cmd_progthread(void *ptr, unsigned long nargs)
 
 	KASSERT(nargs >= 1);
 
-/*	if (nargs > 2) {
+/*
+	if (nargs > 2) {
 		kprintf("Warning: argument passing from menu not supported\n");
 	}
 */
@@ -102,7 +118,7 @@ cmd_progthread(void *ptr, unsigned long nargs)
 
 	strcpy(progname, args[0]);
 
-	result = runprogram(progname,args,nargs);
+	result = runprogram(progname, args, nargs);
 	if (result) {
 		kprintf("Running program %s failed: %s\n", args[0],
 			strerror(result));
@@ -437,6 +453,7 @@ static const char *opsmenu[] = {
 	"[sync]    Sync filesystems          ",
 	"[panic]   Intentional panic         ",
 	"[q]       Quit and shut down        ",
+  "[dth]     Enable DB_THREADS debugging message ",
 	NULL
 };
 
@@ -506,7 +523,6 @@ static const char *mainmenu[] = {
 #endif
 	"[kh] Kernel heap stats              ",
 	"[q] Quit and shut down              ",
-	"[dth] Enable Debugging Threads      ",
 	NULL
 };
 
@@ -522,16 +538,6 @@ cmd_mainmenu(int n, char **a)
 }
 
 
-static
-int
-cmd_debug(int n, char **a)
-{
-        (void)n;
-        (void)a;
-	dbflags = 0x10;
-	
-        return 0;
-}
 ////////////////////////////////////////
 //
 // Command table.
@@ -561,9 +567,11 @@ static struct {
 	{ "q",		cmd_quit },
 	{ "exit",	cmd_quit },
 	{ "halt",	cmd_quit },
-	{ "dth",       cmd_debug },	  
+  /* operations :"dth" - A0 */
+  { "dth", cmd_debug },
+
 #if OPT_SYNCHPROBS
-	/* in-kernel synchronion problem(s) */
+	/* in-kernel synchronization problem(s) */
 	{ "sp1",	whalemating },
 #ifdef UW
 	{ "sp2",	catmouse },

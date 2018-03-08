@@ -101,7 +101,7 @@ boot(void)
 	kprintf("%s", harvard_copyright);
 	kprintf("\n");
 
-	kprintf("Qian Wu's system version %s (%s #%d)\n", 
+	kprintf("Seun Ho Kim's system version %s (%s #%d)\n", 
 		GROUP_VERSION, buildconfig, buildversion);
 	kprintf("\n");
 
