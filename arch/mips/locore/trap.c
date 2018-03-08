@@ -39,6 +39,10 @@
 #include <vm.h>
 #include <mainbus.h>
 #include <syscall.h>
+#include <addrspace.h>
+#include <proc.h>
+#include <kern/wait.h>
+#include "opt-A3.h"
 
 
 /* in exception.S */
@@ -86,9 +90,6 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 		sig = SIGABRT;
 		break;
 	    case EX_MOD:
-	    sig = SIGSEGV;
-	    sys__exit(sig,false);
-	    
 	    case EX_TLBL:
 	    case EX_TLBS:
 		sig = SIGSEGV;
@@ -110,14 +111,34 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 		sig = SIGFPE;
 		break;
 	}
+  #if OPT_A3
+  (void) epc;
+  (void) vaddr;
+  struct addrspace *as;
+  struct proc *p=curproc;
+  KASSERT(p);
+  p->exit=true;
+  p->exitStatus = _MKWAIT_EXIT(sig);
 
+  KASSERT(curproc->p_addrspace != NULL);
+  as_deactivate();
+  as=curproc_setas(NULL);
+  as_destroy(as);
+  proc_remthread(curthread);
+  proc_destroy(p);
+  thread_exit();
+
+  /* thread_exit() does not return, so we should never get here */
+  panic("Should never get here\n");
+
+  #else
 	/*
 	 * You will probably want to change this.
 	 */
-
 	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n",
 		code, sig, trapcodenames[code], epc, vaddr);
 	panic("I don't know how to handle this\n");
+  #endif
 }
 
 /*

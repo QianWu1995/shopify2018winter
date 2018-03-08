@@ -35,8 +35,8 @@
 #include <thread.h>
 #include <current.h>
 #include <syscall.h>
-#include <synch.h>
 #include "opt-A2.h"
+
 
 /*
  * System call dispatcher.
@@ -87,7 +87,7 @@ syscall(struct trapframe *tf)
 	KASSERT(curthread->t_curspl == 0);
 	KASSERT(curthread->t_iplhigh_count == 0);
 
-	callno = tf->tf_v0; // extract the syscall.
+	callno = tf->tf_v0;
 
 	/*
 	 * Initialize retval to 0. Many of the system calls don't
@@ -100,19 +100,15 @@ syscall(struct trapframe *tf)
 
 	retval = 0;
 
-	switch (callno) { // check which syscall it is.
-	case SYS_reboot:
+	switch (callno) {
+	    case SYS_reboot:
 		err = sys_reboot(tf->tf_a0);
 		break;
 
-	case SYS___time:
+	    case SYS___time:
 		err = sys___time((userptr_t)tf->tf_a0,
 				 (userptr_t)tf->tf_a1);
-
 		break;
- 
-
-	    
 #ifdef UW
 	case SYS_write:
 	  err = sys_write((int)tf->tf_a0,
@@ -121,7 +117,7 @@ syscall(struct trapframe *tf)
 			  (int *)(&retval));
 	  break;
 	case SYS__exit:
-	  sys__exit((int)tf->tf_a0,1);
+	  sys__exit((int)tf->tf_a0);
 	  /* sys__exit does not return, execution should not get here */
 	  panic("unexpected return from sys__exit");
 	  break;
@@ -133,18 +129,22 @@ syscall(struct trapframe *tf)
 			    (userptr_t)tf->tf_a1,
 			    (int)tf->tf_a2,
 			    (pid_t *)&retval);
-
 	  break;
-	case SYS_fork:
-           err = sys_fork(tf, (pid_t *)&retval);
-	break;
 #endif // UW
 
 	    /* Add stuff here */
+
+#if OPT_A2
+  case SYS_fork:
+    err = sys_fork((struct trapframe *)tf, (pid_t *)&retval);
+    break;
+  case SYS_execv:
+    err = sys_execv((char *) tf->tf_a0, (char **) tf->tf_a1);
+    break;
+#endif
  
 	default:
-	  kprintf("Unknown syscall!!! %d\n", callno);
-
+	  kprintf("Unknown syscall %d\n", callno);
 	  err = ENOSYS;
 	  break;
 	}
@@ -160,7 +160,6 @@ syscall(struct trapframe *tf)
 		tf->tf_a3 = 1;      /* signal an error */
 	}
 	else {
-
 		/* Success. */
 		tf->tf_v0 = retval;
 		tf->tf_a3 = 0;      /* signal no error */
@@ -187,32 +186,14 @@ syscall(struct trapframe *tf)
  *
  * Thus, you can trash it and do things another way if you prefer.
  */
-
-/*void
-enter_forked_process(struct trapframe *tf)
-{
-	(void)tf;
-	
-	
-}*/
-
 void
-enter_forked_process(void *tf, unsigned long nh)
+enter_forked_process(void *tf, unsigned long nargs)
 {
-
-
-	 (void) nh;
-	struct trapframe *Ntf = tf;
-	struct trapframe s0tf = *Ntf;
-		
-
-
-	s0tf.tf_v0 = 0;
-	s0tf.tf_a3 = 0;
-	s0tf.tf_epc += 4;
-
-	kfree(Ntf);
-
-	mips_usermode(&s0tf);
-
+	(void) nargs;
+  struct trapframe *tf1 = tf;
+  struct trapframe  tf2= *tf1;
+  tf2.tf_v0= 0;
+  tf2.tf_a3=0;
+  tf2.tf_epc+=4;
+  mips_usermode(&tf2);
 }
