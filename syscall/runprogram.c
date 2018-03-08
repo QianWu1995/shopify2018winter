@@ -44,6 +44,8 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include <opt-A2.h>
+#include <copyinout.h>
 
 /*
  * Load program "progname" and start running it in usermode.
@@ -52,11 +54,11 @@
  * Calls vfs_open on progname and thus may destroy it.
  */
 int
-runprogram(char *progname)
+runprogram(char *progname, char **args, unsigned long nargs)
 {
 	struct addrspace *as;
 	struct vnode *v;
-	vaddr_t entrypoint, stackptr;
+	vaddr_t entrypoint, stackptr, stackptr2;
 	int result;
 
 	/* Open the file. */
@@ -96,10 +98,43 @@ runprogram(char *progname)
 		/* p_addrspace will go away when curproc is destroyed */
 		return result;
 	}
-
-	/* Warp to user mode. */
-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-			  stackptr, entrypoint);
+///////////////NIQQAAAAAAAAA
+    int counter = (int)nargs;
+    if (counter>1){
+        char **argsP= kmalloc(sizeof(char *)*(counter+1));
+        if (argsP == NULL){
+            return ENOMEM;
+        }
+        
+        
+        argsP[counter] = NULL;
+        for (int i=(counter-1); i>=0; i--){
+            stackptr=stackptr-(strlen(args[i])+1);
+            result = copyout (args[i],(userptr_t) stackptr, strlen(args[i])+1);
+            if (result){return result;}
+            argsP[i] = (char *)stackptr;
+        }
+        stackptr = ROUNDUP(stackptr,4);
+        stackptr = stackptr - (sizeof(char *)*(counter+1));
+        result = copyout (argsP, (userptr_t) stackptr, sizeof(char *)*(counter+1));
+        if (result) {return result;}
+        stackptr2 = stackptr;
+        stackptr = ROUNDUP(stackptr, 8);
+        
+        
+        enter_new_process(counter /*argc*/, (userptr_t)stackptr2,  /*userspace addr of argv*/
+                          stackptr, entrypoint);
+        
+    }
+    else {
+        /* Warp to user mode. */
+        enter_new_process(0 , NULL  ,
+                          stackptr, entrypoint);
+    }
+    
+    
+    ////////NIQQAAAAAAAAAAAAAAAA//////
+    
 	
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");

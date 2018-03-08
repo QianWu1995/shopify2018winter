@@ -10,7 +10,9 @@
 #include <addrspace.h>
 #include <copyinout.h>
 #include <mips/trapframe.h>
+#include <kern/fcntl.h>
 #include <synch.h>
+#include <vfs.h>
 
 
   /* this implementation of sys__exit does not do anything with the exit code */
@@ -265,3 +267,151 @@ kprintf("F");
   *retval = pid;
   return(0);
 }
+
+
+
+int sys_execv(char * progname, char ** args){
+    int argcounter = 0;
+    
+    struct addrspace *oldas;
+    struct addrspace *newas;
+    struct vnode *v;
+    vaddr_t entrypoint;
+    vaddr_t stackptr;
+    int result;
+    
+    if(progname == NULL){
+        return EFAULT;
+    }
+    
+    size_t programLen = strlen(progname);
+    programLen += 1;
+    
+    
+    char *newProgram = kmalloc(sizeof(char *) * programLen);
+    if(programLen == 0){
+        return ENOMEM;
+    }
+    result = copyinstr((userptr_t)progname, newProgram, programLen, NULL);
+    
+    if(newProgram == NULL){
+        return ENOMEM;
+    }
+    
+    if(result){
+        return result;
+    }
+    
+    while(1){
+        if(args[argcounter] == NULL){
+            break;
+        }
+        
+        if(strlen(args[argcounter]) > 1024){ // upper bound
+            return (E2BIG);
+            
+        }
+            argcounter += 1;
+    }
+    
+    char ** Args = kmalloc((argcounter + 1));
+    
+    if(argcounter > 64) {// upper bound
+        return E2BIG;
+    }
+    
+    for (int i = 0; i <= argcounter; i++){
+        if(i == argcounter){
+            Args[argcounter] = NULL;
+            break;
+        }
+        Args[i] = kmalloc((strlen(args[i]) + 1) * sizeof(char));
+        result = copyinstr((userptr_t) args[i], Args[i], strlen(args[i]) + 1, NULL);
+        if(result)
+            return result;
+    }
+    // Open the file
+    char *progname2;
+    progname2 = kstrdup(progname);
+    result = vfs_open(progname2, O_RDONLY, 0, &v);
+    kfree(progname2);
+    if (result) {
+        return result;
+    }
+
+    newas = as_create();
+
+    if (newas ==NULL) {
+        vfs_close(v);
+        return ENOMEM;
+    }
+
+    curproc_setas(newas);
+    as_activate();
+    
+    // Load the elf
+    
+    result = load_elf(v, &entrypoint);
+    if (result) {
+        vfs_close(v);
+        curproc_setas(oldas);
+        return result;
+    }
+    
+    // file done.
+    vfs_close(v);
+    
+    
+
+    result = as_define_stack(newas, &stackptr);
+    if (result) {
+        curproc_setas(oldas);
+        return result;
+    }
+    
+    
+
+    
+    vaddr_t argptr[argcounter + 1];
+    
+    int i = argcounter - 1;
+    while(i>=0)
+    {   stackptr -= strlen(Args[i]) + 1;
+        result = copyoutstr(Args[i], (userptr_t)stackptr, strlen(Args[i]) + 1, NULL);
+        if(result)
+            return result;
+        argptr[i] = stackptr;
+        --i;
+    }
+    
+    while(1){
+        if((stackptr % 4) == 0){
+            break;
+        }
+        stackptr--;
+        
+    }
+    
+    argptr[argcounter]=0;
+
+    int j =  argcounter;
+    while(j >= 0){
+        stackptr -= ROUNDUP(sizeof(vaddr_t), 4);
+        result = copyout(&argptr[j], (userptr_t)stackptr, sizeof(vaddr_t));
+        if(result){
+            return result;
+        }
+        
+        --j;
+    }
+    
+    as_destroy(oldas);
+
+    enter_new_process(argcounter , (userptr_t) stackptr,stackptr, entrypoint);
+
+    
+    return EINVAL;
+    
+}
+
+
