@@ -37,6 +37,7 @@
 #include <mips/tlb.h>
 #include <addrspace.h>
 #include <vm.h>
+#include "opt-A3.h"
 
 /*
  * Dumb MIPS-only "VM system" that is intended to only be just barely
@@ -51,24 +52,89 @@
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 
+
+// keep track of the status of each frame using core_map structure
+// it should track which frames are used and available. It should
+// keep track of contigous memory allocation
+struct CoreMap{
+  paddr_t addrs;
+  bool available;
+  // consider adding some info in the core-map to help determine the num of pages that need to be freed
+  int numPages;
+};
+
+struct CoreMap *cmap;
+
+unsigned int numFrames=0;
+bool bootdone=false;
+
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+#if OPT_A3
+  
+  // call ram_getsize to get the remaining physical mem in the system
+  paddr_t start;
+  paddr_t end;
+  ram_getsize(&start, &end);
+  
+  //partition the mem into fixed size frames. Each frme is PAGE_size bytes
+  numFrames=(end-start)/PAGE_SIZE;
+  cmap=(struct CoreMap *)PADDR_TO_KVADDR(start);
+  start+=numFrames * sizeof(struct CoreMap);
+  start=ROUNDUP(start,PAGE_SIZE);
+  numFrames =(end-start)/PAGE_SIZE;
+  
+  for(unsigned int i=0; i<numFrames; ++i){
+    cmap[i].addrs=start;  
+    cmap[i].available=true;   
+    cmap[i].numPages=0;
+    start +=PAGE_SIZE;
+  }
+
+  bootdone=true; 
+#endif
 }
+
 
 static
 paddr_t
 getppages(unsigned long npages)
 {
 	paddr_t addr;
+#if OPT_A3
+  // we want to manage our own mem after bootstrap
+  unsigned int counter = 0;
+  unsigned int nf = (unsigned int)numFrames;
+  if (bootdone){
+    for (unsigned int i =0; i<numFrames; ++i){
+      unsigned int curnp= npages+i;
+      if (cmap[i].available&&curnp<=nf){
+        for (unsigned int k =i; k<curnp; ++k){
+          if(!cmap[k].available) break;
+          else {
+            counter++;
+          }
+        }
 
-	spinlock_acquire(&stealmem_lock);
-
-	addr = ram_stealmem(npages);
-	
-	spinlock_release(&stealmem_lock);
-	return addr;
+        if (counter == npages){
+         cmap[i].numPages=npages;
+         for (unsigned int k=i; k<curnp; ++k){
+          cmap[i].available=false;
+         }
+         return cmap[i].addrs;
+        }
+        counter = 0 ;
+      }
+    }
+    return 0;
+  }
+#endif
+    spinlock_acquire(&stealmem_lock);
+    addr = ram_stealmem(npages);
+    
+    spinlock_release(&stealmem_lock);
+    return addr;
 }
 
 /* Allocate/free some kernel-space virtual pages */
@@ -86,9 +152,23 @@ alloc_kpages(int npages)
 void 
 free_kpages(vaddr_t addr)
 {
-	/* nothing - leak the memory. */
+#if OPT_A3
+  // translte addr to physical addrs
+  paddr_t addrs = KVADDR_TO_PADDR(addr);
+  for (unsigned int i=0; i<numFrames; ++i){
+    if(cmap[i].addrs== addrs){
+      int tofree = cmap[i].numPages; 
+      for (int j=0; j<tofree; ++j){
+        cmap[i+j].available = true;
+      }
+    } 
+    if (cmap[i].numPages==0) break;
+  }
 
+#else
+	/* nothing - leak the memory. */
 	(void)addr;
+#endif
 }
 
 void
@@ -121,7 +201,11 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	switch (faulttype) {
 	    case VM_FAULT_READONLY:
 		/* We always create pages read-write, so we can't get this */
+      #if OPT_A3
+      return EFAULT;
+      #else
 		panic("dumbvm: got VM_FAULT_READONLY\n");
+      #endif
 	    case VM_FAULT_READ:
 	    case VM_FAULT_WRITE:
 		break;
@@ -194,13 +278,30 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		}
 		ehi = faultaddress;
 		elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+    #if OPT_A3
+  if ((as->as_loaddone==true) && (faultaddress>=vbase1 && faultaddress <vtop1)){
+    //when load_elf completes, flush the tlb, and ensure that all future TLB entries for the text segment has TLBLO_DIRTY off
+    elo &= ~TLBLO_DIRTY;
+    
+  }
+    #endif
 		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 		tlb_write(ehi, elo, i);
 		splx(spl);
 		return 0;
 	}
-
+  #if OPT_A3
+  ehi= faultaddress;
+  elo = paddr|TLBLO_DIRTY|TLBLO_VALID;
+  if ((as->as_loaddone==true) && (faultaddress>=vbase1 && faultaddress <vtop1)){
+    //when load_elf completes, flush the tlb, and ensure that all future TLB entries for the text segment has TLBLO_DIRTY off
+    elo &= ~TLBLO_DIRTY;
+    
+  }
+  tlb_random(ehi, elo);
+  #else
 	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
+  #endif
 	splx(spl);
 	return EFAULT;
 }
@@ -220,14 +321,24 @@ as_create(void)
 	as->as_pbase2 = 0;
 	as->as_npages2 = 0;
 	as->as_stackpbase = 0;
-    as->as_loaddone=false;
+  // add a flag to indicate wheter or not load_elf has complete
+  as->as_loaddone=false;
+
 	return as;
 }
 
 void
 as_destroy(struct addrspace *as)
 {
+#if OPT_A3
+  KASSERT(as != NULL);
+  free_kpages (PADDR_TO_KVADDR(as->as_pbase1));
+  free_kpages (PADDR_TO_KVADDR(as->as_pbase2));
+  free_kpages (PADDR_TO_KVADDR(as->as_stackpbase));
+  kfree(as);
+#else
 	kfree(as);
+#endif
 }
 
 void
